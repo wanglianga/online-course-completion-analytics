@@ -1,0 +1,29 @@
+services:
+  course-analytics:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: course-completion-analytics
+    image: course-completion-analytics:latest
+    volumes:
+      - ./data:/app/data
+      - ./output:/app/output
+    environment:
+      - COMPLETION_LEVEL=${COMPLETION_LEVEL:-standard}
+      - PYTHONUNBUFFERED=1
+    command: >
+      sh -c "
+        echo '🚀 开始运行在线课程完课路径分析...' &&
+        python main.py --level ${COMPLETION_LEVEL:-standard} ${USE_EXISTING:+--use-existing} &&
+        echo '📊 分析完成！启动HTTP服务查看报告...' &&
+        cd output && python -m http.server 8000
+      "
+    ports:
+      - "8000:8000"
+    restart: "no"
+    networks:
+      - analytics-net
+
+networks:
+  analytics-net:
+    driver: bridge
