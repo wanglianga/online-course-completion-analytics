@@ -180,8 +180,10 @@ class ReportGenerator:
             ("#behavior", "👥 用户分群"),
             ("#funnel", "🔻 章节漏斗"),
             ("#quiz", "❓ 测验卡点"),
+            ("#quiz-deep", "🎯 卡点深度定位"),
             ("#hw", "📝 作业拖延"),
             ("#abnormal", "⚠️ 异常记录"),
+            ("#cleaning", "🧹 数据清洗"),
             ("#compare", "📈 课程对比"),
             ("#cert", "🏆 证书转化"),
             ("#recommend", "💡 推荐线索"),
@@ -332,7 +334,7 @@ class ReportGenerator:
 
     def _build_abnormal_detail_section(self, abnormal_df):
         if len(abnormal_df) == 0:
-            rows = '<tr><td colspan="6" style="text-align:center;padding:20px;color:#6c757d">暂无异常记录</td></tr>'
+            rows = '<tr><td colspan="7" style="text-align:center;padding:20px;color:#6c757d">暂无异常记录</td></tr>'
         else:
             top_df = abnormal_df.head(50)
             rows = ""
@@ -340,6 +342,8 @@ class ReportGenerator:
                 sev_class = {
                     "高": "tag-red", "中": "tag-orange", "低": "tag-blue"
                 }.get(row["abnormal_severity"], "tag-gray")
+                treatment = row.get("treatment", "—")
+                treat_class = {"剔除": "tag-red", "降权": "tag-orange", "保留": "tag-green"}.get(treatment, "tag-gray")
                 rows += f"""
                 <tr>
                     <td>{row['user_id']}</td>
@@ -347,6 +351,7 @@ class ReportGenerator:
                     <td>{row['chapter_name'][:20] if pd.notna(row['chapter_name']) else '-'}</td>
                     <td><span class="tag {sev_class}">{row['abnormal_type']}</span></td>
                     <td>{row['indicator_1']}<br><small>{row['indicator_2']}</small></td>
+                    <td><span class="tag {treat_class}">{treatment}</span></td>
                     <td>{row['suggestion']}</td>
                 </tr>
                 """
@@ -368,8 +373,10 @@ class ReportGenerator:
             <div class="section-title">⚠️ 异常学习记录详情（Top 50）</div>
             <div class="warning-box">
                 <b>说明：</b>异常记录仅作为疑似标记，需人工复核确认。
-                后台挂时长=高暂停率+后台标记；跳看刷课=高倍速+低进度；
-                快速完成=短时间内完成大量内容；退款后观看=退款后仍有学习记录。
+                后台挂播=高暂停率+后台标记；倍速跳过=高倍速+低进度；
+                播放时长异常长=单次播放超过章节时长3倍；频繁刷新=同一章节播放≥8次；
+                多设备同时播放=同一用户同时播放不同章节；快速完成=短时间内完成大量内容；退款后观看=退款后仍有学习记录。
+                每条记录标记了<b>处理方式</b>（剔除/降权/保留），详见数据清洗章节。
             </div>
             <div class="subsection">
                 <div class="subsection-title">异常类型汇总</div>
@@ -384,11 +391,274 @@ class ReportGenerator:
                     <thead>
                         <tr>
                             <th>用户ID</th><th>课程ID</th><th>章节/范围</th>
-                            <th>异常类型</th><th>关键指标</th><th>建议处理</th>
+                            <th>异常类型</th><th>关键指标</th><th>处理方式</th><th>建议处理</th>
                         </tr>
                     </thead>
                     <tbody>{rows}</tbody>
                 </table>
+            </div>
+        </div>
+        """
+
+    def _build_cleaning_section(self, cleaning_data):
+        if not cleaning_data or cleaning_data.get("total_records", 0) == 0:
+            return """
+            <div class="section" id="cleaning">
+                <div class="section-title">🧹 学习行为数据清洗与完课率影响</div>
+                <p style="color:#6c757d;padding:20px;text-align:center">暂无清洗数据</p>
+            </div>
+            """
+
+        total = cleaning_data["total_records"]
+        flagged = cleaning_data["flagged_records"]
+        clean = cleaning_data["clean_records"]
+        flagged_ratio = cleaning_data.get("flagged_ratio", 0)
+        exclude = cleaning_data.get("exclude_count", 0)
+        downweight = cleaning_data.get("downweight_count", 0)
+        retain = cleaning_data.get("retain_count", 0)
+        impact = cleaning_data.get("cleaning_impact", {})
+        type_detail = cleaning_data.get("type_treatment_detail", [])
+
+        type_rows = ""
+        for td in type_detail:
+            treat_class_e = "tag-red" if td["exclude_count"] > 0 else "tag-gray"
+            treat_class_d = "tag-orange" if td["downweight_count"] > 0 else "tag-gray"
+            type_rows += f"""
+            <tr>
+                <td>{td['abnormal_type']}</td>
+                <td>{td['total_flagged']}</td>
+                <td><span class="tag {treat_class_e}">{td['exclude_count']}</span></td>
+                <td><span class="tag {treat_class_d}">{td['downweight_count']}</span></td>
+                <td>{td['treatment_rule']}</td>
+                <td style="font-size:12px">{td['impact_on_completion']}</td>
+            </tr>
+            """
+
+        completion_impact = cleaning_data.get("completion_rate_impact", {})
+        impact_rows = ""
+        significant_impacts = [
+            (k, v) for k, v in completion_impact.items()
+            if v["impact_pct"] >= 5
+        ]
+        for (uid, cid), imp in sorted(significant_impacts, key=lambda x: -x[1]["impact_pct"])[:30]:
+            course_info = ""
+            impact_rows += f"""
+            <tr>
+                <td>{uid}</td>
+                <td>{cid}</td>
+                <td>{imp['original_watch_ratio']:.1%}</td>
+                <td>{imp['cleaned_watch_ratio']:.1%}</td>
+                <td>{imp['excluded_minutes']:.1f}</td>
+                <td>{imp['downweighted_minutes']:.1f}</td>
+                <td>{'tag-red' if imp['impact_pct'] >= 20 else 'tag-orange' if imp['impact_pct'] >= 10 else 'tag-blue'}">
+                    <span class="tag {'tag-red' if imp['impact_pct'] >= 20 else 'tag-orange' if imp['impact_pct'] >= 10 else 'tag-blue'}">{imp['impact_pct']:.1f}%</span>
+                </td>
+            </tr>
+            """
+
+        return f"""
+        <div class="section" id="cleaning">
+            <div class="section-title">🧹 学习行为数据清洗与完课率影响说明</div>
+
+            <div class="description-box">
+                <b>核心原则：</b>完课率不能仅依赖原始播放时长计算。本系统对异常学习行为进行<b>标记→分类→处理</b>三步清洗，
+                明确说明哪些数据被<b>剔除</b>（不计入统计）、哪些被<b>降权</b>（按比例折算）、哪些被<b>保留</b>（正常计入），
+                确保完课率报告反映真实学习效果。
+            </div>
+
+            <div class="kpi-grid">
+                <div class="kpi-card">
+                    <div class="kpi-label">总播放记录</div>
+                    <div class="kpi-value">{total:,}</div>
+                </div>
+                <div class="kpi-card green">
+                    <div class="kpi-label">正常记录</div>
+                    <div class="kpi-value">{clean:,}</div>
+                    <div class="kpi-sub">占比 {(1-flagged_ratio):.1%}</div>
+                </div>
+                <div class="kpi-card orange">
+                    <div class="kpi-label">标记异常</div>
+                    <div class="kpi-value">{flagged:,}</div>
+                    <div class="kpi-sub">占比 {flagged_ratio:.1%}</div>
+                </div>
+                <div class="kpi-card" style="background:linear-gradient(135deg,#EF553B,#FF6B6B)">
+                    <div class="kpi-label">剔除记录</div>
+                    <div class="kpi-value">{exclude:,}</div>
+                    <div class="kpi-sub">不计入完课率</div>
+                </div>
+                <div class="kpi-card" style="background:linear-gradient(135deg,#FFD700,#FFA500)">
+                    <div class="kpi-label">降权记录</div>
+                    <div class="kpi-value">{downweight:,}</div>
+                    <div class="kpi-sub">按比例折算</div>
+                </div>
+                <div class="kpi-card teal">
+                    <div class="kpi-label">受影响用户</div>
+                    <div class="kpi-value">{impact.get('affected_users', 0):,}</div>
+                    <div class="kpi-sub">用户-课程对 {impact.get('affected_user_course_pairs', 0)}</div>
+                </div>
+            </div>
+
+            <div class="subsection">
+                <div class="subsection-title">各类异常处理规则与完课率影响</div>
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>异常类型</th><th>标记数</th><th>剔除</th><th>降权</th>
+                            <th>处理规则</th><th>对完课率的影响</th>
+                        </tr>
+                    </thead>
+                    <tbody>{type_rows}</tbody>
+                </table>
+            </div>
+
+            <div class="subsection">
+                <div class="subsection-title">完课率影响显著的学员（影响≥5%）</div>
+                <div class="warning-box">
+                    <b>说明：</b>以下学员在清洗后完课率（观看比例）下降超过5%，表示原始数据中存在较多异常行为导致完课率虚高。
+                    清洗后的完课率更接近真实学习效果。
+                </div>
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>用户ID</th><th>课程ID</th><th>原始观看比</th><th>清洗后观看比</th>
+                            <th>剔除时长</th><th>降权时长</th><th>影响幅度</th>
+                        </tr>
+                    </thead>
+                    <tbody>{impact_rows if impact_rows else '<tr><td colspan="7" style="text-align:center;color:#6c757d">无影响显著的学员</td></tr>'}</tbody>
+                </table>
+            </div>
+
+            <div class="chart-container">
+                <div class="chart-title">数据清洗可视化</div>
+                <iframe src="charts/behavior_cleaning_summary.html" class="chart-frame" onload="this.style.height=this.contentWindow.document.body.scrollHeight + 'px'"></iframe>
+            </div>
+        </div>
+        """
+
+    def _build_quiz_deep_section(self, deep_df):
+        if deep_df is None or len(deep_df) == 0:
+            return """
+            <div class="section" id="quiz-deep">
+                <div class="section-title">🎯 测验卡点深度定位</div>
+                <p style="color:#6c757d;padding:20px;text-align:center">暂无测验卡点深度分析数据</p>
+            </div>
+            """
+
+        bottleneck_only = deep_df[deep_df["is_bottleneck"] == True]
+
+        if len(bottleneck_only) == 0:
+            return """
+            <div class="section" id="quiz-deep">
+                <div class="section-title">🎯 测验卡点深度定位</div>
+                <div class="description-box">
+                    <b>好消息：</b>当前数据中未发现明显测验卡点，所有测验的首次通过率、参与率和重复尝试次数均在正常范围内。
+                </div>
+            </div>
+            """
+
+        card_rows = ""
+        for _, row in bottleneck_only.iterrows():
+            va = row.get("video_analysis", {})
+            ha = row.get("homework_analysis", {})
+            da = row.get("discussion_analysis", {})
+            clues = row.get("optimization_clues", [])
+            ag = row.get("affected_group", {})
+
+            va_html = ""
+            if isinstance(va, dict):
+                va_html = f"""
+                <b>🎬 关联视频分析：</b><br>
+                &nbsp;&nbsp;未通过学员：平均进度 {va.get('failed_avg_progress', 0):.0%}，平均倍速 {va.get('failed_avg_speed', 0):.1f}x，
+                平均观看 {va.get('failed_avg_watch_minutes', 0):.1f}分钟<br>
+                &nbsp;&nbsp;通过学员：平均进度 {va.get('passed_avg_progress', 0):.0%}，平均倍速 {va.get('passed_avg_speed', 0):.1f}x，
+                平均观看 {va.get('passed_avg_watch_minutes', 0):.1f}分钟<br>
+                &nbsp;&nbsp;📊 诊断：{va.get('diagnosis', '—')}
+                """
+
+            ha_html = ""
+            if isinstance(ha, dict) and ha.get("has_related_homework"):
+                f_score = ha.get('failed_avg_hw_score', '—')
+                p_score = ha.get('passed_avg_hw_score', '—')
+                ha_html = f"""
+                <b>📝 关联作业分析：</b><br>
+                &nbsp;&nbsp;未通过学员作业均分：{f_score}，提交率：{ha.get('failed_hw_submit_rate', 0):.0%}<br>
+                &nbsp;&nbsp;通过学员作业均分：{p_score}，提交率：{ha.get('passed_hw_submit_rate', 0):.0%}<br>
+                &nbsp;&nbsp;📊 诊断：{ha.get('diagnosis', '—')}
+                """
+            elif isinstance(ha, dict):
+                ha_html = "<b>📝 关联作业分析：</b>该章节无关联作业数据"
+
+            da_html = ""
+            if isinstance(da, dict):
+                da_html = f"""
+                <b>💬 讨论区分析：</b><br>
+                &nbsp;&nbsp;讨论数：{da.get('total_discussions', 0)}，提问数：{da.get('question_posts', 0)}，
+                未回复率：{da.get('unanswered_rate', 0):.0%}<br>
+                &nbsp;&nbsp;📊 诊断：{da.get('diagnosis', '—')}
+                """
+
+            clues_html = ""
+            if isinstance(clues, list) and clues:
+                clue_items = ""
+                for c in clues:
+                    p_class = {"高": "tag-red", "中": "tag-orange", "低": "tag-blue"}.get(c.get("priority", "低"), "tag-gray")
+                    clue_items += f"""
+                    <div style="padding:8px 12px;margin:6px 0;background:#f8f9ff;border-radius:6px;border-left:3px solid {'#EF553B' if c.get('priority')=='高' else '#FFD700' if c.get('priority')=='中' else '#90EE90'}">
+                        <span class="tag {p_class}">{c.get('priority', '低')}</span>
+                        <b>{c.get('clue', '')}</b>：{c.get('detail', '')}<br>
+                        <small>💡 建议：{c.get('action', '')}</small>
+                    </div>
+                    """
+                clues_html = f"<b>🔍 内容优化线索：</b>{clue_items}"
+
+            ag_html = ""
+            if isinstance(ag, dict) and ag.get("total_affected", 0) > 0:
+                ut_dist = ag.get("user_type_distribution", {})
+                ut_str = "、".join(f"{k}({v}人)" for k, v in ut_dist.items()) if ut_dist else "—"
+                ag_html = f"""
+                <b>👥 受影响学员群体：</b><br>
+                &nbsp;&nbsp;共 {ag.get('total_affected', 0)} 人未通过，{ag.get('group_description', '')}<br>
+                &nbsp;&nbsp;用户类型分布：{ut_str}<br>
+                &nbsp;&nbsp;平均视频进度：{ag.get('avg_video_progress', 0):.0%}，
+                平均倍速：{ag.get('avg_playback_speed', 0):.1f}x，
+                关联作业均分：{ag.get('avg_homework_score', '—')}
+                """
+
+            sev_class = {"高": "tag-red", "中": "tag-orange", "低": "tag-blue"}.get(row.get("bottleneck_severity", "无"), "tag-gray")
+
+            card_rows += f"""
+            <div class="criteria-card" style="margin-bottom:20px;border-top:4px solid {'#EF553B' if row.get('bottleneck_severity')=='高' else '#FFD700' if row.get('bottleneck_severity')=='中' else '#90EE90'}">
+                <h4>
+                    <span class="tag {sev_class}">卡点{row.get('bottleneck_severity', '无')}</span>
+                    {row.get('course_name', '')} - 第{row.get('chapter_index', 0)}章 {row.get('chapter_name', '')}
+                </h4>
+                <p style="font-size:13px;color:#6c757d;margin:8px 0">
+                    首次通过率：{row.get('first_attempt_pass_rate', 0):.0%} |
+                    平均尝试：{row.get('avg_attempts_per_user', 0):.1f}次 |
+                    参与率：{row.get('quiz_take_rate', 0):.0%} |
+                    因素：{row.get('bottleneck_factors', '—')}
+                </p>
+                <div style="font-size:13px;line-height:1.8">
+                    {va_html}<br>
+                    {ha_html}<br>
+                    {da_html}<br>
+                    {clues_html}<br>
+                    {ag_html}
+                </div>
+            </div>
+            """
+
+        return f"""
+        <div class="section" id="quiz-deep">
+            <div class="section-title">🎯 测验卡点深度定位</div>
+            <div class="description-box">
+                <b>定位逻辑：</b>当某章测验通过率低、反复重做或提交时间异常时，系统自动分析关联的<b>视频片段</b>（未通过学员的观看行为）、
+                <b>题型/作业分数</b>（基础掌握程度）、<b>讨论区问题</b>（学员疑问），输出内容优化线索和受影响学员群体画像。
+            </div>
+            {card_rows}
+            <div class="chart-container">
+                <div class="chart-title">测验卡点深度定位可视化</div>
+                <iframe src="charts/quiz_bottleneck_deep_analysis.html" class="chart-frame" onload="this.style.height=this.contentWindow.document.body.scrollHeight + 'px'"></iframe>
             </div>
         </div>
         """
@@ -535,6 +805,8 @@ class ReportGenerator:
                 "分析作业提交率、拖延率和分数差距：按时提交 vs 延迟提交的分数对比验证拖延对学习效果的负面影响。"
             ),
             self._build_abnormal_detail_section(analysis_results["abnormal_records"]),
+            self._build_cleaning_section(analysis_results.get("behavior_cleaning")),
+            self._build_quiz_deep_section(analysis_results.get("quiz_bottleneck_deep")),
             self._build_chart_section(
                 "compare", "📈 课程综合对比看板",
                 ["course_comparison_dashboard"],
@@ -708,8 +980,20 @@ class ReportGenerator:
             by_type = abnormal_df["abnormal_type"].value_counts()
             insights.append(
                 f"⚠️ <b>异常行为提醒：</b>共识别 {len(abnormal_df)} 条异常记录，"
+                f"涵盖 {len(by_type)} 种异常类型，"
                 f"其中「{by_type.index[0]}」占比最高({by_type.iloc[0]}条)，"
                 f"建议按严重度分级处理，高风险记录优先人工复核。"
+            )
+
+        cleaning = analysis_results.get("behavior_cleaning")
+        if cleaning and cleaning.get("total_records", 0) > 0:
+            flagged_ratio = cleaning.get("flagged_ratio", 0)
+            exclude = cleaning.get("exclude_count", 0)
+            downweight = cleaning.get("downweight_count", 0)
+            insights.append(
+                f"🧹 <b>数据清洗影响：</b>{flagged_ratio:.1%}的播放记录被标记异常，"
+                f"其中{exclude}条剔除（不计入完课率），{downweight}条降权（按比例折算），"
+                f"清洗后完课率更接近真实学习效果。"
             )
 
         conv_df = analysis_results["certificate_conversion"]
@@ -740,6 +1024,26 @@ class ReportGenerator:
                 f"其中高优先级 {high_priority} 条（流失召回+进阶推荐），"
                 f"建议本季度内优先完成高优先级用户的触达。"
             )
+
+        deep_bottleneck = analysis_results.get("quiz_bottleneck_deep")
+        if deep_bottleneck is not None and len(deep_bottleneck) > 0:
+            bottleneck_quizzes = deep_bottleneck[deep_bottleneck["is_bottleneck"] == True]
+            if len(bottleneck_quizzes) > 0:
+                high_severity = len(bottleneck_quizzes[bottleneck_quizzes["bottleneck_severity"] == "高"])
+                total_affected = sum(
+                    ag.get("total_affected", 0) if isinstance(ag, dict) else 0
+                    for ag in bottleneck_quizzes["affected_group"]
+                )
+                all_clues = []
+                for _, row in bottleneck_quizzes.iterrows():
+                    clues = row.get("optimization_clues", [])
+                    if isinstance(clues, list):
+                        all_clues.extend([c for c in clues if c.get("priority") == "高"])
+                insights.append(
+                    f"🎯 <b>测验卡点定位：</b>共 {len(bottleneck_quizzes)} 个测验卡点"
+                    f"（{high_severity}个严重），影响约 {total_affected} 名学员；"
+                    f"生成 {len(all_clues)} 条高优先级优化线索，建议优先调整卡点章节的教学内容。"
+                )
 
         return insights
 

@@ -248,7 +248,7 @@ python -m http.server 8000
 output/
 ├── 在线课程完课路径分析报告.html     # 📄 主报告（含所有图表嵌入）
 ├── run_summary.json                 # 📋 本次运行摘要与参数记录（可复跑）
-├── charts/                          # 📊 所有图表（HTML + PNG双格式）
+├── charts/                          # 📊 所有图表（HTML格式）
 │   ├── chapter_funnel_all.html
 │   ├── chapter_funnel_C001.html ...
 │   ├── dropout_analysis_by_course.html
@@ -256,14 +256,17 @@ output/
 │   ├── behavior_radar_comparison.html
 │   ├── effective_vs_total_duration.html
 │   ├── quiz_bottleneck_analysis.html
+│   ├── quiz_bottleneck_deep_analysis.html
 │   ├── homework_delay_analysis.html
 │   ├── abnormal_learning_records.html
+│   ├── behavior_cleaning_summary.html
 │   ├── course_comparison_dashboard.html
 │   └── certificate_conversion_funnel.html
 └── data_exports/                    # 💾 分析结果CSV导出
     ├── user_course_behavior_classification.csv
     ├── chapter_funnel.csv
     ├── quiz_bottlenecks.csv
+    ├── quiz_bottleneck_deep.csv
     ├── homework_delays.csv
     ├── interaction_contribution.csv
     ├── certificate_conversion.csv

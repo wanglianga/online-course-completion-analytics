@@ -534,7 +534,6 @@ class VisualizationEngine:
         return self._save_figure(fig, "homework_delay_analysis")
 
     def plot_abnormal_records(self, abnormal_df):
-        """异常学习记录可视化"""
         if len(abnormal_df) == 0:
             return None
 
@@ -548,8 +547,11 @@ class VisualizationEngine:
 
         type_counts = abnormal_df["abnormal_type"].value_counts()
         type_colors = {
-            "疑似后台挂时长": "#DDA0DD",
-            "疑似跳看/刷课": "#FFD700",
+            "后台挂播": "#DDA0DD",
+            "倍速跳过": "#FFD700",
+            "播放时长异常长": "#FF6B6B",
+            "同一章节频繁刷新": "#4ECDC4",
+            "多设备同时播放": "#FF8C42",
             "异常快速完成": "#EF553B",
             "退款后继续观看": "#F08080"
         }
@@ -574,7 +576,7 @@ class VisualizationEngine:
         fig.add_trace(
             go.Table(
                 header=dict(
-                    values=["用户", "课程/章节", "异常类型", "严重度", "关键指标"],
+                    values=["用户", "课程/章节", "异常类型", "严重度", "处理方式"],
                     fill_color="#636EFA",
                     font=dict(color="white", size=11),
                     align="left"
@@ -585,10 +587,10 @@ class VisualizationEngine:
                         top_abnormal["chapter_name"].str[:15],
                         top_abnormal["abnormal_type"],
                         top_abnormal["abnormal_severity"],
-                        top_abnormal["indicator_1"].str[:20]
+                        top_abnormal.get("treatment", pd.Series(["—"]*len(top_abnormal)))
                     ],
                     fill_color=[
-                        ["#FFE4E4" if s == "高" else "#FFF4E4" if s == "中" else "#FFFFFF" 
+                        ["#FFE4E4" if s == "高" else "#FFF4E4" if s == "中" else "#FFFFFF"
                          for s in top_abnormal["abnormal_severity"]]
                     ],
                     align="left",
@@ -929,6 +931,243 @@ class VisualizationEngine:
 
         return self._save_figure(fig, "effective_vs_total_duration")
 
+    def plot_behavior_cleaning_summary(self, cleaning_data):
+        if not cleaning_data or cleaning_data.get("total_records", 0) == 0:
+            return None
+
+        fig = make_subplots(
+            rows=2, cols=2,
+            subplot_titles=[
+                "数据清洗总览",
+                "各异常类型标记数量与处理方式",
+                "处理方式分布",
+                "完课率影响分布"
+            ],
+            specs=[
+                [{"type": "pie"}, {}],
+                [{"type": "pie"}, {}]
+            ]
+        )
+
+        total = cleaning_data["total_records"]
+        clean = cleaning_data["clean_records"]
+        flagged = cleaning_data["flagged_records"]
+
+        fig.add_trace(
+            go.Pie(
+                labels=["正常记录", "标记异常"],
+                values=[clean, flagged],
+                marker=dict(colors=["#90EE90", "#EF553B"]),
+                textinfo="label+value+percent",
+                hole=0.4,
+                showlegend=True
+            ),
+            row=1, col=1
+        )
+
+        type_detail = cleaning_data.get("type_treatment_detail", [])
+        if type_detail:
+            types = [t["abnormal_type"] for t in type_detail]
+            exclude_vals = [t["exclude_count"] for t in type_detail]
+            downweight_vals = [t["downweight_count"] for t in type_detail]
+            retain_vals = [t["retain_count"] for t in type_detail]
+
+            fig.add_trace(
+                go.Bar(name="剔除", x=types, y=exclude_vals, marker_color="#EF553B"),
+                row=1, col=2
+            )
+            fig.add_trace(
+                go.Bar(name="降权", x=types, y=downweight_vals, marker_color="#FFD700"),
+                row=1, col=2
+            )
+            fig.add_trace(
+                go.Bar(name="保留", x=types, y=retain_vals, marker_color="#90EE90"),
+                row=1, col=2
+            )
+
+        fig.add_trace(
+            go.Pie(
+                labels=["剔除", "降权", "保留"],
+                values=[
+                    cleaning_data.get("exclude_count", 0),
+                    cleaning_data.get("downweight_count", 0),
+                    cleaning_data.get("retain_count", 0)
+                ],
+                marker=dict(colors=["#EF553B", "#FFD700", "#90EE90"]),
+                textinfo="label+value+percent",
+                hole=0.4
+            ),
+            row=2, col=1
+        )
+
+        completion_impact = cleaning_data.get("completion_rate_impact", {})
+        if completion_impact:
+            impact_pcts = [v["impact_pct"] for v in completion_impact.values()]
+            bins = [0, 5, 10, 20, 50, 100]
+            labels = ["0~5%", "5~10%", "10~20%", "20~50%", "50%+"]
+            hist_vals = pd.cut(impact_pcts, bins=bins, labels=labels, right=False).value_counts().reindex(labels).fillna(0)
+
+            fig.add_trace(
+                go.Bar(
+                    x=hist_vals.index.tolist(),
+                    y=hist_vals.values.tolist(),
+                    marker_color=["#90EE90", "#98FB98", "#FFD700", "#FFA15A", "#EF553B"],
+                    text=[f"{int(v)}" for v in hist_vals.values],
+                    textposition="outside",
+                    showlegend=False
+                ),
+                row=2, col=2
+            )
+
+        fig.update_xaxes(tickangle=-30, row=1, col=2)
+        fig.update_yaxes(title_text="记录数", row=1, col=2)
+        fig.update_xaxes(title_text="完课率影响幅度", row=2, col=2)
+        fig.update_yaxes(title_text="用户-课程数", row=2, col=2)
+        fig.update_layout(
+            title="学习行为数据清洗总览",
+            barmode="stack",
+            height=800,
+            showlegend=True
+        )
+
+        return self._save_figure(fig, "behavior_cleaning_summary")
+
+    def plot_quiz_bottleneck_deep(self, deep_df):
+        if len(deep_df) == 0:
+            return None
+
+        deep_df = deep_df.copy()
+        deep_df["label"] = deep_df.apply(
+            lambda x: f"{x['course_name'][:8]}-第{x['chapter_index']}章", axis=1
+        )
+
+        bottleneck_only = deep_df[deep_df["is_bottleneck"] == True]
+
+        if len(bottleneck_only) == 0:
+            fig = go.Figure()
+            fig.add_annotation(
+                text="未发现测验卡点，所有测验通过率正常",
+                xref="paper", yref="paper", x=0.5, y=0.5,
+                font=dict(size=20), showarrow=False
+            )
+            fig.update_layout(title="测验卡点深度定位", height=400)
+            return self._save_figure(fig, "quiz_bottleneck_deep_analysis")
+
+        fig = make_subplots(
+            rows=2, cols=2,
+            subplot_titles=[
+                "卡点测验：未通过学员 vs 通过学员视频进度对比",
+                "卡点测验：关联作业均分对比",
+                "讨论区活跃度与未回复率",
+                "内容优化线索优先级分布"
+            ],
+            specs=[
+                [{}, {}],
+                [{}, {"type": "pie"}]
+            ]
+        )
+
+        progress_data = []
+        for _, row in bottleneck_only.iterrows():
+            va = row.get("video_analysis", {})
+            if isinstance(va, dict):
+                progress_data.append({
+                    "label": row["label"],
+                    "failed_progress": va.get("failed_avg_progress", 0) * 100,
+                    "passed_progress": va.get("passed_avg_progress", 0) * 100
+                })
+        if progress_data:
+            pdf = pd.DataFrame(progress_data)
+            fig.add_trace(
+                go.Bar(name="未通过学员进度", x=pdf["label"], y=pdf["failed_progress"], marker_color="#EF553B"),
+                row=1, col=1
+            )
+            fig.add_trace(
+                go.Bar(name="通过学员进度", x=pdf["label"], y=pdf["passed_progress"], marker_color="#00CC96"),
+                row=1, col=1
+            )
+
+        hw_data = []
+        for _, row in bottleneck_only.iterrows():
+            ha = row.get("homework_analysis", {})
+            if isinstance(ha, dict) and ha.get("has_related_homework"):
+                hw_data.append({
+                    "label": row["label"],
+                    "failed_score": ha.get("failed_avg_hw_score", 0) or 0,
+                    "passed_score": ha.get("passed_avg_hw_score", 0) or 0
+                })
+        if hw_data:
+            hdf = pd.DataFrame(hw_data)
+            fig.add_trace(
+                go.Bar(name="未通过学员作业均分", x=hdf["label"], y=hdf["failed_score"], marker_color="#EF553B", showlegend=False),
+                row=1, col=2
+            )
+            fig.add_trace(
+                go.Bar(name="通过学员作业均分", x=hdf["label"], y=hdf["passed_score"], marker_color="#00CC96", showlegend=False),
+                row=1, col=2
+            )
+
+        disc_data = []
+        for _, row in bottleneck_only.iterrows():
+            da = row.get("discussion_analysis", {})
+            if isinstance(da, dict):
+                disc_data.append({
+                    "label": row["label"],
+                    "total": da.get("total_discussions", 0),
+                    "unanswered_rate": da.get("unanswered_rate", 0) * 100
+                })
+        if disc_data:
+            ddf = pd.DataFrame(disc_data)
+            fig.add_trace(
+                go.Bar(name="讨论数", x=ddf["label"], y=ddf["total"], marker_color="#AB63FA", showlegend=False),
+                row=2, col=1
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=ddf["label"], y=ddf["unanswered_rate"],
+                    mode="markers+lines", name="未回复率(%)",
+                    marker=dict(size=10, color="#EF553B"),
+                    yaxis="y2", showlegend=True
+                ),
+                row=2, col=1
+            )
+
+        all_clues = []
+        for _, row in bottleneck_only.iterrows():
+            clues = row.get("optimization_clues", [])
+            if isinstance(clues, list):
+                all_clues.extend(clues)
+        if all_clues:
+            priority_counts = {}
+            for c in all_clues:
+                p = c.get("priority", "低")
+                priority_counts[p] = priority_counts.get(p, 0) + 1
+            fig.add_trace(
+                go.Pie(
+                    labels=list(priority_counts.keys()),
+                    values=list(priority_counts.values()),
+                    marker=dict(colors=["#EF553B", "#FFD700", "#90EE90"]),
+                    textinfo="label+value+percent",
+                    hole=0.4
+                ),
+                row=2, col=2
+            )
+
+        fig.update_xaxes(tickangle=-30, row=1, col=1)
+        fig.update_xaxes(tickangle=-30, row=1, col=2)
+        fig.update_xaxes(tickangle=-30, row=2, col=1)
+        fig.update_yaxes(title_text="进度(%)", row=1, col=1)
+        fig.update_yaxes(title_text="分数", row=1, col=2)
+        fig.update_yaxes(title_text="讨论数", row=2, col=1)
+        fig.update_layout(
+            title="测验卡点深度定位分析",
+            barmode="group",
+            height=900,
+            showlegend=True
+        )
+
+        return self._save_figure(fig, "quiz_bottleneck_deep_analysis")
+
     def generate_all_charts(self, analysis_results, user_course_df, data_dict):
         """生成所有图表"""
         print("\n=== 开始生成可视化图表 ===")
@@ -962,13 +1201,23 @@ class VisualizationEngine:
         print("6. 生成异常学习记录...")
         self.plot_abnormal_records(abnormal_df)
 
-        print("7. 生成课程综合对比...")
+        print("7. 生成学习行为数据清洗图表...")
+        cleaning_data = analysis_results.get("behavior_cleaning")
+        if cleaning_data:
+            self.plot_behavior_cleaning_summary(cleaning_data)
+
+        print("8. 生成测验卡点深度定位图表...")
+        deep_bottleneck_df = analysis_results.get("quiz_bottleneck_deep")
+        if deep_bottleneck_df is not None and len(deep_bottleneck_df) > 0:
+            self.plot_quiz_bottleneck_deep(deep_bottleneck_df)
+
+        print("9. 生成课程综合对比...")
         self.plot_course_comparison(conversion_df, user_course_df, funnel_df)
 
-        print("8. 生成证书转化漏斗...")
+        print("10. 生成证书转化漏斗...")
         self.plot_certificate_funnel(conversion_df)
 
-        print("9. 生成有效时长vs总时长对比...")
+        print("11. 生成有效时长vs总时长对比...")
         self.plot_effective_vs_total_watch(user_course_df)
 
         print(f"\n=== 图表生成完成！共生成 {len(self.generated_charts)} 个图表 ===")
