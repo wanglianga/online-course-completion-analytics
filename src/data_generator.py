@@ -137,8 +137,8 @@ class DataGenerator:
             course_chapters = chapters_df[chapters_df["course_id"] == course_id].sort_values("chapter_index")
 
             behavior_type = np.random.choice(
-                ["normal", "skipper", "background", "repeater", "dropout_early", "dropout_mid", "complete"],
-                p=[0.25, 0.15, 0.1, 0.1, 0.15, 0.1, 0.15]
+                ["normal", "skipper", "background", "repeater", "dropout_early", "dropout_mid", "complete", "long_play", "frequent_refresh"],
+                p=[0.22, 0.13, 0.1, 0.1, 0.13, 0.08, 0.12, 0.06, 0.06]
             )
 
             if behavior_type == "complete":
@@ -151,7 +151,10 @@ class DataGenerator:
                 chapters_to_play = course_chapters.head(np.random.randint(3, len(course_chapters) + 1))
 
             for _, chap in chapters_to_play.iterrows():
-                n_sessions = np.random.randint(1, 5)
+                if behavior_type == "frequent_refresh":
+                    n_sessions = np.random.randint(8, 16)
+                else:
+                    n_sessions = np.random.randint(1, 5)
                 for s in range(n_sessions):
                     chap_duration = chap["duration_minutes"]
                     speed = np.random.choice([1.0, 1.25, 1.5, 2.0], p=[0.5, 0.2, 0.2, 0.1])
@@ -165,10 +168,15 @@ class DataGenerator:
                         progress_ratio = np.random.uniform(1.0, 1.5)
                     elif behavior_type == "dropout_early" and chap["chapter_index"] > 2:
                         progress_ratio = np.random.uniform(0.1, 0.5)
+                    elif behavior_type == "long_play":
+                        progress_ratio = np.random.uniform(0.8, 1.0)
                     else:
                         progress_ratio = np.random.uniform(0.7, 1.05)
 
-                    actual_watch_minutes = chap_duration * min(progress_ratio, 1.0)
+                    if behavior_type == "long_play":
+                        actual_watch_minutes = chap_duration * np.random.uniform(3.2, 5.5)
+                    else:
+                        actual_watch_minutes = chap_duration * min(progress_ratio, 1.0)
 
                     if chap["is_free_preview"] and not enroll["is_paid"]:
                         if chap["chapter_index"] > 2:
@@ -178,8 +186,12 @@ class DataGenerator:
                     pause_count = int(np.random.poisson(3 if behavior_type != "background" else 0))
                     if behavior_type == "background":
                         pause_count = int(np.random.poisson(15))
+                    elif behavior_type == "long_play":
+                        pause_count = int(np.random.poisson(8))
 
                     is_background = (behavior_type == "background") or (np.random.random() < 0.05)
+                    if behavior_type == "long_play":
+                        is_background = np.random.random() < 0.3
 
                     play_start = self._random_date(
                         start=datetime.combine(enroll["enroll_date"], datetime.min.time()))
